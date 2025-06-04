@@ -1,138 +1,229 @@
-from lib.db.connection import get_connection
+from db.connection import CURSOR, CONN
 
 class Magazine:
-    def __init__(self, name, category, id=None):
-        self.id = id
-        self.name = name
+    all = {}
+
+    def __init__(self, name, category, magazine_id = None):
+        self.magazine_id = magazine_id
+        self.name = name 
         self.category = category
-
+    
     def __repr__(self):
-        return f"<Magazine {self.id}: {self.name} ({self.category})>"
+        return f"Magazine ID ({self.magazine_id}): {self.name} -- {self.category}"
 
     @classmethod
+    #Creating the magazines table
     def create_table(cls):
-        """Create the magazines table"""
-        with get_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS magazines (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    category TEXT NOT NULL
-                )
-            """)
-
-    def save(self):
-        """Save the magazine to the database"""
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            if self.id is None:
-                cursor.execute(
-                    "INSERT INTO magazines (name, category) VALUES (?, ?)",
-                    (self.name, self.category)
-                )
-                self.id = cursor.lastrowid
-            else:
-                cursor.execute(
-                    "UPDATE magazines SET name = ?, category = ? WHERE id = ?",
-                    (self.name, self.category, self.id)
-                )
+        sql = """
+            CREATE TABLE IF NOT EXISTS magazines (
+                magazine_id INTEGER PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                category VARCHAR(255) NOT NULL
+            )
+        """
+        CURSOR.execute(sql)
+        CONN.commit()
 
     @classmethod
+    #Deleting the magazines table
+    def drop_table(cls):
+        sql = """
+            DROP TABLE IF EXISTS magazines;
+        """
+        CURSOR.execute(sql)
+        CONN.commit()
+
+    #Inserting a new row into the magazines table
+    def save(self):
+        sql = """
+            INSERT INTO magazines (name, category)
+            VALUES (?, ?)
+        """
+        CURSOR.execute(sql, (self.name, self.category))
+        CONN.commit()
+
+        self.magazine_id = CURSOR.lastrowid
+            
+        #Adds the magazine instance to the dictionary
+        type(self).all[self.magazine_id] = self
+
+    @classmethod
+    def instance_from_db(cls, row):
+
+        #Checking for exitsing magazine instance using the row id
+        magazine = cls.all.get(row[0])
+
+        if magazine:
+            magazine.name = row[1]
+            magazine.category = row[2]
+        else:
+            magazine = cls(row[1], row[2], magazine_id=row[0])
+            cls.all[magazine.magazine_id] = magazine
+        return magazine
+    
+    @classmethod
+    def get_all(cls):
+        """Return a list containing a Magazine object per row in the table"""
+        sql = """
+            SELECT *
+            FROM magazines
+        """
+
+        rows = CURSOR.execute(sql).fetchall()
+
+        return [cls.instance_from_db(row) for row in rows]
+    
+    @classmethod
+    def find_by_id(cls, magazine_id):
+        sql = """
+            SELECT * FROM magazines
+            WHERE magazine_id = ?
+        """
+        row = CURSOR.execute(sql, (magazine_id,)).fetchone()
+        return cls.instance_from_db(row) if row else None
+    
+    @classmethod
+    def find_by_name(cls, name):
+        sql = """
+            SELECT * FROM magazines
+            WHERE name = ?
+        """
+        row = CURSOR.execute(sql, (name,)).fetchone()
+        return cls.instance_from_db(row) if row else None
+    
+    @classmethod
+    def find_by_category(cls, category):
+        sql = """
+            SELECT * FROM magazines
+            WHERE category = ?
+        """
+        row = CURSOR.execute(sql, (category,)).fetchone()
+        return cls.instance_from_db(row) if row else None
+    
+    @classmethod
+    def get_all_by_category(cls, category):
+        sql = """
+            SELECT * FROM magazines
+            WHERE category = ?
+        """
+        rows = CURSOR.execute(sql, (category,)).fetchall()
+        return [cls.instance_from_db(row) for row in rows]
+    
+    @classmethod
+    def with_multiple_authors(cls):
+        sql = """
+            SELECT m.*
+            FROM magazines m
+            JOIN articles a ON m.magazine_id = a.magazine_id
+            GROUP BY m.magazine_id
+            HAVING COUNT(DISTINCT a.author_id) >= 2
+        """
+        rows = CURSOR.execute(sql).fetchall()
+        return [cls.instance_from_db(row) for row in rows]
+    
+    @classmethod
+    def article_counts(cls):
+        sql = """
+            SELECT m.name, COUNT(a.article_id) AS article_count
+            FROM magazines m
+            LEFT JOIN articles a ON m.magazine_id = a.magazine_id
+            GROUP BY m.magazine_id
+        """
+        rows = CURSOR.execute(sql).fetchall()
+        return [{'name': row[0], 'article_count': row[1]} for row in rows]
+    
+    @classmethod
+    def most_articles_written(cls):
+        sql = """
+            SELECT a.*, COUNT(ar.article_id) AS article_count
+            FROM authors a
+            JOIN articles ar ON a.author_id = ar.author_id
+            GROUP BY a.author_id
+            ORDER BY article_count DESC
+            LIMIT 1
+        """
+        row = CURSOR.execute(sql).fetchone()
+        return cls.instance_from_db(row) if row else None
+
+    @classmethod
+    #Creating a new magazine record
     def create(cls, name, category):
-        """Create and save a new magazine"""
         magazine = cls(name, category)
         magazine.save()
         return magazine
+    
+    #Updating an existing magazine record
+    def update(self):
+        sql = """
+            UPDATE magazines
+            SET name = ?, category = ?
+            WHERE magazine_id = ?
+        """
+        CURSOR.execute(sql, (self.name, self.category, self.magazine_id))
+        CONN.commit()
 
-    @classmethod
-    def find_by_id(cls, id):
-        """Find a magazine by ID"""
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM magazines WHERE id = ?", 
-                (id,)
-            ).fetchone()
-            if row:
-                return cls(row['name'], row['category'], row['id'])
-            return None
+    #Deleting an magazine record
+    def delete(self):
+        sql = """
+            DELETE FROM magazines
+            WHERE magazine_id = ?
+        """
+        CURSOR.execute(sql, (self.magazine_id,))
+        CONN.commit()
 
-    @classmethod
-    def find_by_name(cls, name):
-        """Find a magazine by name"""
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM magazines WHERE name = ?", 
-                (name,)
-            ).fetchone()
-            if row:
-                return cls(row['name'], row['category'], row['id'])
-            return None
+        del type(self).all[self.magazine_id]
 
-    @classmethod
-    def all(cls):
-        """Return all magazines from the database"""
-        with get_connection() as conn:
-            rows = conn.execute("SELECT * FROM magazines").fetchall()
-            return [cls(row["name"], row["category"], row["id"]) for row in rows]
-
-    def articles(self):
-        """Get all articles published in this magazine"""
-        from lib.models.article import Article
-        with get_connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM articles WHERE magazine_id = ?",
-                (self.id,)
-            ).fetchall()
-            return [Article(row['title'], row['author_id'], row['magazine_id'], row['id']) 
-                   for row in rows]
+        self.magazine_id = None
 
     def contributors(self):
-        """Get all authors who have written for this magazine"""
+        sql = """
+            SELECT DISTINCT au.*
+            FROM authors au
+            JOIN articles a ON au.author_id = a.author_id
+            WHERE a.magazine_id = ?
+        """
+        rows = CURSOR.execute(sql, (self.magazine_id,)).fetchall()
         from lib.models.author import Author
-        with get_connection() as conn:
-            rows = conn.execute("""
-                SELECT DISTINCT authors.*
-                FROM authors
-                JOIN articles ON authors.id = articles.author_id
-                WHERE articles.magazine_id = ?
-            """, (self.id,)).fetchall()
-            return [Author(row['name'], row['id']) for row in rows]
+        return [Author.instance_from_db(row) for row in rows]
 
     def article_titles(self):
-        """Get all article titles published in this magazine"""
-        with get_connection() as conn:
-            rows = conn.execute(
-                "SELECT title FROM articles WHERE magazine_id = ?",
-                (self.id,)
-            ).fetchall()
-            return [row['title'] for row in rows]
+        sql = "SELECT title FROM articles WHERE magazine_id = ?"
+        rows = CURSOR.execute(sql, (self.magazine_id,)).fetchall()
+        return [row[0] for row in rows]
 
     def contributing_authors(self):
-        """Get authors with more than 2 articles in this magazine"""
+        sql = """
+            SELECT au.*, COUNT(a.article_id) as article_count
+            FROM authors au
+            JOIN articles a ON au.author_id = a.author_id
+            WHERE a.magazine_id = ?
+            GROUP BY au.author_id
+            HAVING article_count > 2
+        """
+        rows = CURSOR.execute(sql, (self.magazine_id,)).fetchall()
         from lib.models.author import Author
-        with get_connection() as conn:
-            rows = conn.execute("""
-                SELECT authors.*, COUNT(articles.id) as article_count
-                FROM authors
-                JOIN articles ON authors.id = articles.author_id
-                WHERE articles.magazine_id = ?
-                GROUP BY authors.id
-                HAVING article_count > 2
-            """, (self.id,)).fetchall()
-            return [Author(row['name'], row['id']) for row in rows]
+        return [Author.instance_from_db(row) for row in rows]
 
-    @classmethod
-    def top_publisher(cls):
-        """Find the magazine with the most articles"""
-        with get_connection() as conn:
-            row = conn.execute("""
-                SELECT magazines.*, COUNT(articles.id) as article_count
-                FROM magazines
-                LEFT JOIN articles ON magazines.id = articles.magazine_id
-                GROUP BY magazines.id
-                ORDER BY article_count DESC
-                LIMIT 1
-            """).fetchone()
-            if row:
-                return cls(row['name'], row['category'], row['id'])
-            return None
+    def articles(self):
+        #Return all the articles associated with the current Magazine instance
+        from lib.models.article import Article
+        sql = """
+            SELECT * FROM articles
+            WHERE magazine_id = ?
+        """
+        rows = CURSOR.execute(sql, (self.magazine_id,)).fetchall()
+
+        return [Article.instance_from_db(row) for row in rows]
+    
+    def authors(self):
+        from lib.models.author import Author
+        sql = """
+            SELECT DISTINCT au.*
+            FROM authors au
+            JOIN articles ar ON au.author_id = ar.author_id
+            WHERE ar.magazine_id = ?
+        """
+        rows = CURSOR.execute(sql, (self.magazine_id,)).fetchall()
+        return [Author.instance_from_db(row) for row in rows]
+
+    

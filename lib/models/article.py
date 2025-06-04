@@ -1,93 +1,132 @@
-from lib.db.connection import get_connection
+
+from db.connection import CURSOR, CONN
 
 class Article:
-    def __init__(self, title, author_id, magazine_id, id=None):
-        self.id = id
+    all = {}
+
+    def __init__(self, title, author_id, magazine_id ,article_id = None):
+        self.article_id = article_id
         self.title = title
         self.author_id = author_id
         self.magazine_id = magazine_id
 
     def __repr__(self):
-        return f"<Article {self.id}: {self.title}>"
+        return (
+            f"<Article ID ({self.article_id}): {self.title} " +
+            f"Author ID ({self.author_id}), Magazine ID ({self.magazine_id})>"
+        )
 
     @classmethod
+    #Creating the articles table
     def create_table(cls):
-        """Create the articles table"""
-        with get_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS articles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    author_id INTEGER NOT NULL,
-                    magazine_id INTEGER NOT NULL,
-                    FOREIGN KEY (author_id) REFERENCES authors(id) ON DELETE CASCADE,
-                    FOREIGN KEY (magazine_id) REFERENCES magazines(id) ON DELETE CASCADE
-                )
-            """)
-
-    def save(self):
-        """Save the article to the database"""
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            if self.id is None:
-                cursor.execute(
-                    "INSERT INTO articles (title, author_id, magazine_id) VALUES (?, ?, ?)",
-                    (self.title, self.author_id, self.magazine_id)
-                )
-                self.id = cursor.lastrowid
-            else:
-                cursor.execute(
-                    "UPDATE articles SET title = ?, author_id = ?, magazine_id = ? WHERE id = ?",
-                    (self.title, self.author_id, self.magazine_id, self.id)
-                )
+        sql = """
+            CREATE TABLE IF NOT EXISTS articles (
+                article_id INTEGER PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                author_id INTEGER,
+                magazine_id INTEGER,
+                FOREIGN KEY (author_id) REFERENCES authors(author_id),
+                FOREIGN KEY (magazine_id) REFERENCES magazines(magazine_id)
+            )
+        """
+        CURSOR.execute(sql)
+        CONN.commit()
 
     @classmethod
-    def create(cls, title, author, magazine):
-        """Create and save a new article"""
-        article = cls(title, author.id, magazine.id)
+    #Deleting the articles table
+    def drop_table(cls):
+        sql = """
+            DROP TABLE IF EXISTS articles;
+        """
+        CURSOR.execute(sql)
+        CONN.commit()
+
+    #Inserting a new row into the articles table
+    def save(self):
+        sql = """
+            INSERT INTO articles (title, author_id, magazine_id)
+            VALUES (?, ?, ?)
+        """
+        CURSOR.execute(sql, (self.title, self.author_id, self.magazine_id))
+        CONN.commit()
+
+        self.article_id = CURSOR.lastrowid
+        
+        #Adds the article instance to the dictionary
+        type(self).all[self.article_id] = self
+
+    @classmethod
+    def instance_from_db(cls, row):
+
+        #Checking for exitsing article instance using the row id
+        article = cls.all.get(row[0])
+
+        if article:
+            article.title = row[1]
+            article.author_id = row[2]
+            article.magazine_id = row[3]
+        else:
+            article = cls(row[1], row[2], row[3], article_id=row[0])
+            cls.all[article.article_id] = article
+        return article
+    
+    @classmethod
+    def get_all(cls):
+        """Return a list containing a Article object per row in the table"""
+        sql = """
+            SELECT *
+            FROM articles
+        """
+
+        rows = CURSOR.execute(sql).fetchall()
+
+        return [cls.instance_from_db(row) for row in rows]
+    
+    @classmethod
+    def find_by_id(cls, article_id):
+        sql = """
+            SELECT * FROM articles
+            WHERE article_id = ?
+        """
+        row = CURSOR.execute(sql, (article_id,)).fetchone()
+        return cls.instance_from_db(row) if row else None
+    
+    
+    @classmethod
+    def find_by_title(cls, title):
+        sql = """
+           SELECT * FROM articles
+           WHERE title = ?
+        """
+        row = CURSOR.execute(sql, (title,)).fetchone()
+        return cls.instance_from_db(row) if row else None
+
+    @classmethod
+    #Creating a new article record
+    def create(cls, title, author_id, magazine_id):
+        article = cls(title, author_id, magazine_id)
         article.save()
         return article
+    
+    #Updating an existing article record
+    def update(self):
+        sql = """
+            UPDATE articles
+            SET title = ?, author_id = ?, magazine_id = ?
+            WHERE article_id = ?
+        """
+        CURSOR.execute(sql, (self.title, self.author_id, self.magazine_id, self.article_id))
+        CONN.commit()
 
-    @classmethod
-    def find_by_id(cls, id):
-        """Find an article by ID"""
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM articles WHERE id = ?", 
-                (id,)
-            ).fetchone()
-            if row:
-                return cls(row['title'], row['author_id'], row['magazine_id'], row['id'])
-            return None
+    #Deleting an article record
+    def delete(self):
+        sql = """
+            DELETE FROM articles
+            WHERE article_id = ?
+        """
+        CURSOR.execute(sql, (self.article_id,))
+        CONN.commit()
 
-    def author(self):
-        """Get the author of this article"""
-        from lib.models.author import Author
-        return Author.find_by_id(self.author_id)
+        del type(self).all[self.article_id]
 
-    def magazine(self):
-        """Get the magazine this article was published in"""
-        from lib.models.magazine import Magazine
-        return Magazine.find_by_id(self.magazine_id)
-
-    @classmethod
-    def all(cls):
-        """Get all articles"""
-        with get_connection() as conn:
-            rows = conn.execute("SELECT * FROM articles").fetchall()
-            return [cls(row['title'], row['author_id'], row['magazine_id'], row['id']) 
-                   for row in rows]# ... existing code ...
-
-        # ... existing code ...
-
-        @classmethod
-        def all(cls):
-            """Get all articles"""
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM articles")
-                rows = cursor.fetchall()
-                if rows:
-                    return [cls(row['title'], row['author_id'], row['magazine_id'], row['id']) 
-                        for row in rows]
-                return []
+        self.article_id = None
